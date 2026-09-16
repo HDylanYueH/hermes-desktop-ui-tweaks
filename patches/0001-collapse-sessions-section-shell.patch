@@ -1,0 +1,91 @@
+From 28f4f24b4586f77ccb3077627b98dc2bd9d74bce Mon Sep 17 00:00:00 2001
+From: HDylanYueH <HDylanYueH@users.noreply.github.com>
+Date: Wed, 26 Aug 2026 01:23:34 +0800
+Subject: [PATCH] fix(desktop): collapse sessions section shell when folded so
+ messaging/cron reflow up
+
+The recents section kept its flex-1 min-h-32 shell even when folded,
+leaving a dead gap above messaging/cron. Folded now shrinks to the
+header row and the cron block takes the slack via a new grow prop.
+---
+ .../desktop/src/app/chat/sidebar/cron-jobs-section.tsx | 10 ++++++++--
+ apps/desktop/src/app/chat/sidebar/index.tsx            |  8 +++++++-
+ 2 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx b/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx
+index b8feea2416..aa10f2657c 100644
+--- a/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx
++++ b/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx
+@@ -78,12 +78,15 @@ interface SidebarCronJobsSectionProps {
+   onTriggerJob: (jobId: string) => Promise<void>
+   onToggle: () => void
+   open: boolean
++  // 会话节收起时接过它让出的剩余高度,避免侧边栏出现死空白。
++  grow?: boolean
+ }
+ 
+ export function SidebarCronJobsSection({
+   jobs,
+   label,
+   max = 50,
++  grow = false,
+   onManageJob,
+   onOpenRun,
+   onTriggerJob,
+@@ -177,7 +180,7 @@ export function SidebarCronJobsSection({
+   const hiddenCount = Math.min(sorted.length, max) - shown.length
+ 
+   return (
+-    <SidebarGroup className="shrink-0 p-0 pb-1">
++    <SidebarGroup className={cn('p-0 pb-1', grow ? 'min-h-0 flex-1' : 'shrink-0')}>
+       <div className="group/section flex shrink-0 items-center justify-between pb-1 pt-1.5">
+         <button
+           className="group/section-label flex w-fit min-w-0 items-center gap-1 bg-transparent text-left leading-none"
+@@ -192,7 +195,10 @@ export function SidebarCronJobsSection({
+         </button>
+       </div>
+       {open && (
+-        <SidebarGroupContent className="scrollbar-fade flex max-h-72 flex-col gap-px overflow-x-hidden overflow-y-auto overscroll-contain pb-1.75 compact:max-h-none compact:overflow-visible">
++        <SidebarGroupContent className={cn(
++          'scrollbar-fade flex flex-col gap-px overflow-x-hidden overflow-y-auto overscroll-contain pb-1.75 compact:max-h-none compact:overflow-visible',
++          grow ? 'min-h-0 max-h-none' : 'max-h-72'
++        )}>
+           {shown.map(job => (
+             <CronJobSidebarRow
+               busy={triggeringJobIds.has(job.id)}
+diff --git a/apps/desktop/src/app/chat/sidebar/index.tsx b/apps/desktop/src/app/chat/sidebar/index.tsx
+index 611a5a4d45..40c691f377 100644
+--- a/apps/desktop/src/app/chat/sidebar/index.tsx
++++ b/apps/desktop/src/app/chat/sidebar/index.tsx
+@@ -437,6 +437,9 @@ export function ChatSidebar({
+   // otherwise be stuck in the grouped view with no way out.
+   const showAllProfiles = multiProfile && profileScope === ALL_PROFILES
+   const messagingProfile = sidebarProfileForScope(profileScope)
++  // 会话节收起时塌缩外壳:它平时靠 flex-1 min-h-32 占满剩余空间,
++  // 收起后若不摘掉,空壳继续占位,下面的飞书/定时任务无法上移回填。
++  const sessionsCollapsed = !agentsOpen
+   const agentOrderIds = useStore($sidebarSessionOrderIds)
+   const agentOrderManual = useStore($sidebarSessionOrderManual)
+   const workspaceOrderIds = useStore($sidebarWorkspaceOrderIds)
+@@ -1885,7 +1888,9 @@ export function ChatSidebar({
+                 projectsLoading={worktreeGroupingActive ? projectTreeLoading : false}
+                 removedSessionIds={inProject ? removedSessionIds : undefined}
+                 rootClassName={cn(
+-                  'min-h-32 flex-1 overflow-hidden p-0',
++                  sessionsCollapsed
++                    ? 'shrink-0 overflow-hidden p-0'
++                    : 'min-h-32 flex-1 overflow-hidden p-0',
+                   !recentsVirtualizes && 'compact:min-h-0 compact:flex-none compact:overflow-visible'
+                 )}
+                 sessions={displayAgentSessions}
+@@ -1941,6 +1946,7 @@ export function ChatSidebar({
+ 
+             {!trimmedQuery && !worktreeGroupingActive && cronJobs.length > 0 && (
+               <SidebarCronJobsSection
++                grow={sessionsCollapsed}
+                 jobs={cronJobs}
+                 label={s.cronJobs}
+                 onManageJob={onManageCronJob}
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,291 @@
+From 9a254d99eeb50f5b83d36a1dc568850eb142a22a Mon Sep 17 00:00:00 2001
+From: HDylanYueH <HDylanYueH@users.noreply.github.com>
+Date: Tue, 8 Sep 2026 17:28:11 +0800
+Subject: [PATCH] desktop: cron jobs tab in the right sidebar (FILES | CRON)
+
+---
+ .../app/chat/sidebar/cron-jobs-section.tsx    |   6 +-
+ apps/desktop/src/app/contrib/controller.tsx   |  28 +++
+ .../src/app/right-sidebar/cron-tab.tsx        | 186 ++++++++++++++++++
+ 3 files changed, 217 insertions(+), 3 deletions(-)
+ create mode 100644 apps/desktop/src/app/right-sidebar/cron-tab.tsx
+
+diff --git a/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx b/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx
+index aa10f2657c..620fe6fbb9 100644
+--- a/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx
++++ b/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx
+@@ -43,7 +43,7 @@ const PEEK_BACKSTOP_INTERVAL_MS = 60_000
+ const INITIAL_VISIBLE_JOBS = 3
+ const LOAD_MORE_STEP = 10
+ 
+-function nextRunMs(job: CronJob): null | number {
++export function nextRunMs(job: CronJob): null | number {
+   if (!job.next_run_at) {
+     return null
+   }
+@@ -224,7 +224,7 @@ export function SidebarCronJobsSection({
+   )
+ }
+ 
+-function CronJobSidebarRow({
++export function CronJobSidebarRow({
+   busy,
+   expanded,
+   job,
+@@ -388,7 +388,7 @@ function CronJobSidebarRow({
+   )
+ }
+ 
+-function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (sessionId: string) => void }) {
++export function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (sessionId: string) => void }) {
+   const { t } = useI18n()
+   const c = t.cron
+   const selectedSessionId = useStore($selectedStoredSessionId)
+diff --git a/apps/desktop/src/app/contrib/controller.tsx b/apps/desktop/src/app/contrib/controller.tsx
+index a1fa39755b..7f8d1aba7e 100644
+--- a/apps/desktop/src/app/contrib/controller.tsx
++++ b/apps/desktop/src/app/contrib/controller.tsx
+@@ -90,6 +90,7 @@ import {
+ } from '../chat/session-tile'
+ import { AppContextMenu } from '../context-menu/app-context-menu'
+ import { HudShell } from '../hud/hud-shell'
++import { CronPaneZone } from '../right-sidebar/cron-tab'
+ import { $terminalTakeover, setTerminalTakeover } from '../right-sidebar/store'
+ import { $workspaceIsPage } from '../routes'
+ 
+@@ -229,6 +230,23 @@ registry.registerMany([
+     },
+     render: () => idle(<FilesPane />)
+   },
++  {
++    id: 'cron',
++    area: 'panes',
++    title: 'cron',
++    // The cron tab lives stacked in the file-browser rail (dock center on
++    // files); visibility rides $fileBrowserOpen below so the titlebar toggle
++    // opens both tabs together.
++    data: {
++      placement: 'right',
++      collapsible: true,
++      dock: { pane: 'files', pos: 'center' },
++      width: FILE_BROWSER_DEFAULT_WIDTH,
++      minWidth: FILE_BROWSER_MIN_WIDTH,
++      maxWidth: FILE_BROWSER_MAX_WIDTH
++    },
++    render: () => idle(<CronPaneZone />)
++  },
+   {
+     id: 'review',
+     area: 'panes',
+@@ -605,6 +623,16 @@ const $hasWorkspace = computed($currentCwd, cwd => Boolean(cwd.trim()))
+ // writes the store too. Without the opener the boolean went stale the moment
+ // anything but the toggle showed the pane — the divergence this whole change
+ // is about.
++// Cron rides the same rail as the file browser: the titlebar toggle opens
++// both tabs, and closing either closes the rail. Bound BEFORE files (see the
++// files bind below) so the files unhide fronts LAST when the rail opens —
++// the file tree stays the default active tab, cron waits behind it.
++bindPaneVisibility(
++  'cron',
++  computed([$hasWorkspace, $fileBrowserOpen], (workspace, open) => workspace && open),
++  () => setFileBrowserOpen(false),
++  () => setFileBrowserOpen(true)
++)
+ bindPaneVisibility(
+   'files',
+   computed([$hasWorkspace, $fileBrowserOpen], (workspace, open) => workspace && open),
+diff --git a/apps/desktop/src/app/right-sidebar/cron-tab.tsx b/apps/desktop/src/app/right-sidebar/cron-tab.tsx
+new file mode 100644
+index 0000000000..7225529acf
+--- /dev/null
++++ b/apps/desktop/src/app/right-sidebar/cron-tab.tsx
+@@ -0,0 +1,186 @@
++import { createCronTriggerController, type CronTriggerController } from '@hermes/shared'
++import { useStore } from '@nanostores/react'
++import { useEffect, useRef, useState } from 'react'
++import { useNavigate } from 'react-router'
++
++import { refreshCronJobs, triggerAndRefreshCronJobs } from '@/app/cron/cron-actions'
++import { jobTitle } from '@/app/cron/job-state'
++import { openSession } from '@/app/open-session'
++import { CRON_ROUTE } from '@/app/routes'
++import { usePaneVisible } from '@/components/pane-shell/pane-visibility'
++import { useI18n } from '@/i18n'
++import { $cronJobs, setCronFocusJobId } from '@/store/cron'
++import { $profileScope, ALL_PROFILES } from '@/store/profile'
++import { forgetSessionOwnerHintsForSession, requestSessionResume } from '@/store/session'
++
++import { CronJobSidebarRow, nextRunMs } from '../chat/sidebar/cron-jobs-section'
++import { SidebarPanelLabel } from '../shell/sidebar-label'
++
++import { RightSidebarSectionHeader } from './index'
++
++// The cron tab of the right sidebar: the same job rows the left sidebar's
++// "Cron jobs" section renders (shared component, shared $cronJobs atom), but
++// full-height in the file-browser rail so scheduled work is glanceable next to
++// the workspace tree. Rows keep their peek/trigger/pause/delete affordances;
++// management opens the full Cron page.
++export function CronPane() {
++  const { t } = useI18n()
++  const c = t.cron
++  const navigate = useNavigate()
++  const jobs = useStore($cronJobs)
++  const profileScope = useStore($profileScope)
++  const visible = usePaneVisible()
++
++  const [nowMs, setNowMs] = useState(() => Date.now())
++  const [peekJobId, setPeekJobId] = useState<null | string>(null)
++  const [triggeringJobIds, setTriggeringJobIds] = useState<ReadonlySet<string>>(() => new Set())
++  const triggerControllerRef = useRef<CronTriggerController | null>(null)
++
++  // The pane may mount before the app-wide cron poll lands its first payload;
++  // fetch once if the shared atom is still empty (silent — errors surface via
++  // the background sync path the left section rides).
++  useEffect(() => {
++    if ($cronJobs.get().length > 0) {
++      return
++    }
++
++    const scope = profileScope === ALL_PROFILES ? 'all' : profileScope
++    void refreshCronJobs(scope).catch(() => undefined)
++  }, [profileScope])
++
++  // eslint-disable-next-line no-restricted-syntax -- controller mount identity, not an atom mirror
++  useEffect(() => {
++    const controller = createCronTriggerController((jobId, running) => {
++      if (triggerControllerRef.current !== controller) {
++        return
++      }
++
++      setTriggeringJobIds(current => {
++        const next = new Set(current)
++
++        if (running) {
++          next.add(jobId)
++        } else {
++          next.delete(jobId)
++        }
++
++        return next
++      })
++    })
++
++    triggerControllerRef.current = controller
++
++    return () => {
++      triggerControllerRef.current = null
++    }
++  }, [])
++
++  // One clock for the list (rows are pure) — countdowns tick without a full
++  // re-render of the pane. Runs only while this tab is the visible pane.
++  useEffect(() => {
++    if (!visible) {
++      return
++    }
++
++    const id = window.setInterval(() => setNowMs(Date.now()), 1000)
++
++    return () => window.clearInterval(id)
++  }, [visible])
++
++  // Same next-run-first ordering the left sidebar section uses.
++  const sorted = [...jobs].sort((a, b) => {
++    const an = nextRunMs(a)
++    const bn = nextRunMs(b)
++
++    if (an !== null && bn !== null && an !== bn) {
++      return an - bn
++    }
++
++    if (an === null && bn !== null) {
++      return 1
++    }
++
++    if (an !== null && bn === null) {
++      return -1
++    }
++
++    return jobTitle(a).localeCompare(jobTitle(b))
++  })
++
++  const triggerJob = (jobId: string) => {
++    const controller = triggerControllerRef.current
++
++    if (!controller) {
++      return
++    }
++
++    const scope = profileScope === ALL_PROFILES ? 'all' : profileScope
++    void controller.run(jobId, () => triggerAndRefreshCronJobs(jobId, scope)).catch(() => undefined)
++  }
++
++  const openRun = (sessionId: string) => {
++    forgetSessionOwnerHintsForSession(sessionId)
++    requestSessionResume(sessionId)
++    openSession(sessionId, navigate)
++  }
++
++  const manageJob = (jobId: string) => {
++    setCronFocusJobId(jobId)
++    navigate(CRON_ROUTE)
++  }
++
++  return (
++    <aside
++      aria-label={c.title}
++      className="relative flex h-full w-full min-w-0 flex-col overflow-hidden border-(--ui-stroke-secondary) bg-(--ui-sidebar-surface-background) pt-(--titlebar-height) text-(--ui-text-tertiary)"
++    >
++      <RightSidebarSectionHeader>
++        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
++          <SidebarPanelLabel>{c.title}</SidebarPanelLabel>
++          {jobs.length > 0 && <span className="text-[0.6875rem] text-(--ui-text-quaternary)">{c.count(jobs.length)}</span>}
++        </div>
++      </RightSidebarSectionHeader>
++
++      {sorted.length === 0 ? (
++        <div className="flex flex-1 flex-col items-start gap-2 px-3 pb-3 pt-1 text-[0.75rem] text-(--ui-text-tertiary)">
++          <span>{c.emptyTitleNew}</span>
++          <button
++            aria-label={c.title}
++            className="rounded-md text-(--ui-text-secondary) underline-offset-2 hover:text-foreground hover:underline"
++            onClick={() => navigate(CRON_ROUTE)}
++            type="button"
++          >
++            {c.manage}
++          </button>
++        </div>
++      ) : (
++        <div className="scrollbar-fade flex min-h-0 flex-1 flex-col gap-px overflow-x-hidden overflow-y-auto overscroll-contain px-0.5 pb-1.75">
++          {sorted.map(job => (
++            <CronJobSidebarRow
++              busy={triggeringJobIds.has(job.id)}
++              expanded={peekJobId === job.id}
++              job={job}
++              key={job.id}
++              nowMs={nowMs}
++              onManage={() => manageJob(job.id)}
++              onOpenRun={openRun}
++              onTogglePeek={() => setPeekJobId(prev => (prev === job.id ? null : job.id))}
++              onTrigger={() => triggerJob(job.id)}
++            />
++          ))}
++        </div>
++      )}
++    </aside>
++  )
++}
++
++export const CRON_PANE_ZONE_CONTENT =
++  'h-full [&>aside]:h-full [&>aside]:w-full [&>aside]:pt-0'
++
++export function CronPaneZone() {
++  return (
++    <div className={CRON_PANE_ZONE_CONTENT}>
++      <CronPane />
++    </div>
++  )
++}
+-- 
+2.54.0 (Apple Git-157)
+
