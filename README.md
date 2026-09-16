@@ -21,17 +21,30 @@ Plus `scripts/apply-and-repack.sh`, which re-applies both patches, runs the side
 
 ## Usage
 
-After every `hermes update`:
+**Prerequisites:** a working Hermes source checkout with dependencies installed (the default location is `~/.hermes/hermes-agent`; set `HERMES_REPO=/path/to/hermes-agent` if yours differs).
+
+After every `hermes update`, run it one of two ways:
 
 ```bash
+# 1. Command line
 scripts/apply-and-repack.sh
+
+# 2. Or double-click apply-and-repack.command in Finder — it opens Terminal
+#    and runs the same script. Nothing is installed on your Desktop.
 ```
 
-Then quit Hermes (⌘Q) and relaunch — changes load on restart. Packing works fine while the app is open.
+Expected output:
+
+```
+→ applying: desktop: cron jobs tab in the right sidebar (FILES | CRON)   # or: ✓ already applied, skipping
+→ running sidebar tests...   # ✓ passed (skipped if node_modules is missing)
+→ packing the desktop app (~2 min, the app may stay open)...
+✅ Done. Quit Hermes (⌘Q) and relaunch — changes load on restart.
+```
+
+**Result:** after relaunching Hermes, the right sidebar shows two tabs — `FILES | CRON` — and the folded Sessions section no longer blocks the Messaging/Cron sections below it.
 
 The script is idempotent: patches already in the tree are detected (reverse-apply check) and skipped. If upstream changed the same lines, `git am --3way` stops with a conflict message instead of forcing anything.
-
-Set `HERMES_REPO=/path/to/hermes-agent` if your checkout isn't at the default `~/.hermes/hermes-agent`.
 
 ## How the cron tab was built (dev notes)
 

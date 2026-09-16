@@ -21,17 +21,30 @@ Hermes Desktop 是打包发布的应用:改源码 → `npm run pack` 重打包 �
 
 ## 用法
 
-每次 `hermes update` 之后:
+**前提:** 一份能跑起来的 Hermes 源码检出且依赖已装好(默认路径 `~/.hermes/hermes-agent`;不在这个路径时用 `HERMES_REPO=/path/to/hermes-agent` 指定)。
+
+每次 `hermes update` 之后,两种方式任选:
 
 ```bash
+# 1. 命令行
 scripts/apply-and-repack.sh
+
+# 2. 或在访达里双击仓库根目录的 apply-and-repack.command——它会打开终端
+#    跑同一个脚本。不会往你的桌面安装任何东西。
 ```
 
-跑完后 ⌘Q 完全退出 Hermes 再重开——改动重启后才生效(打包时 app 开着没关系)。
+预期输出:
+
+```
+→ applying: desktop: cron jobs tab in the right sidebar (FILES | CRON)   # 或: ✓ already applied, skipping
+→ running sidebar tests...   # ✓ 通过(node_modules 缺失时跳过)
+→ packing the desktop app (~2 min, the app may stay open)...
+✅ Done. Quit Hermes (⌘Q) and relaunch — changes load on restart.
+```
+
+**结果:** 重开 Hermes 后,右侧栏出现 `FILES | CRON` 两个 tab;左侧栏 Sessions 折叠后不再挡住下面的 Messaging/Cron 区块。
 
 脚本是幂等的:已在代码里的补丁会被检出(reverse-apply 检查)并跳过。如果上游改了同样的代码行,`git am --3way` 会停下报冲突,不会硬合。
-
-仓库不在默认路径 `~/.hermes/hermes-agent` 时,用 `HERMES_REPO=/path/to/hermes-agent` 指定。
 
 ## 开发思路(怎么做的)
 
