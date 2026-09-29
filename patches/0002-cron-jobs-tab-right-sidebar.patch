@@ -1,4 +1,4 @@
-From 9a254d99eeb50f5b83d36a1dc568850eb142a22a Mon Sep 17 00:00:00 2001
+From e9ad09f526b042117f398f627c8323b3eb4e1d3a Mon Sep 17 00:00:00 2001
 From: HDylanYueH <HDylanYueH@users.noreply.github.com>
 Date: Tue, 8 Sep 2026 17:28:11 +0800
 Subject: [PATCH] desktop: cron jobs tab in the right sidebar (FILES | CRON)
@@ -6,12 +6,12 @@ Subject: [PATCH] desktop: cron jobs tab in the right sidebar (FILES | CRON)
 ---
  .../app/chat/sidebar/cron-jobs-section.tsx    |   6 +-
  apps/desktop/src/app/contrib/controller.tsx   |  28 +++
- .../src/app/right-sidebar/cron-tab.tsx        | 186 ++++++++++++++++++
- 3 files changed, 217 insertions(+), 3 deletions(-)
+ .../src/app/right-sidebar/cron-tab.tsx        | 196 ++++++++++++++++++
+ 3 files changed, 227 insertions(+), 3 deletions(-)
  create mode 100644 apps/desktop/src/app/right-sidebar/cron-tab.tsx
 
 diff --git a/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx b/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx
-index aa10f2657c..620fe6fbb9 100644
+index 0a8606cfa36..0a596609d11 100644
 --- a/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx
 +++ b/apps/desktop/src/app/chat/sidebar/cron-jobs-section.tsx
 @@ -43,7 +43,7 @@ const PEEK_BACKSTOP_INTERVAL_MS = 60_000
@@ -23,7 +23,7 @@ index aa10f2657c..620fe6fbb9 100644
    if (!job.next_run_at) {
      return null
    }
-@@ -224,7 +224,7 @@ export function SidebarCronJobsSection({
+@@ -233,7 +233,7 @@ export function SidebarCronJobsSection({
    )
  }
  
@@ -32,28 +32,28 @@ index aa10f2657c..620fe6fbb9 100644
    busy,
    expanded,
    job,
-@@ -388,7 +388,7 @@ function CronJobSidebarRow({
+@@ -403,7 +403,7 @@ function CronJobSidebarRow({
    )
  }
  
--function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (sessionId: string) => void }) {
-+export function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (sessionId: string) => void }) {
-   const { t } = useI18n()
-   const c = t.cron
-   const selectedSessionId = useStore($selectedStoredSessionId)
+-function CronJobSidebarRuns({
++export function CronJobSidebarRuns({
+   jobId,
+   onOpenRun
+ }: {
 diff --git a/apps/desktop/src/app/contrib/controller.tsx b/apps/desktop/src/app/contrib/controller.tsx
-index a1fa39755b..7f8d1aba7e 100644
+index f746ab7dca8..6ebfeaa3b32 100644
 --- a/apps/desktop/src/app/contrib/controller.tsx
 +++ b/apps/desktop/src/app/contrib/controller.tsx
-@@ -90,6 +90,7 @@ import {
+@@ -114,6 +114,7 @@ import {
  } from '../chat/session-tile'
  import { AppContextMenu } from '../context-menu/app-context-menu'
  import { HudShell } from '../hud/hud-shell'
 +import { CronPaneZone } from '../right-sidebar/cron-tab'
  import { $terminalTakeover, setTerminalTakeover } from '../right-sidebar/store'
- import { $workspaceIsPage } from '../routes'
- 
-@@ -229,6 +230,23 @@ registry.registerMany([
+ import { terminalPaletteToggle } from '../right-sidebar/terminal/reveal-focus'
+ import { $workspaceIsPage, WORKSPACE_PAGE_HEADER_AREA } from '../routes'
+@@ -269,6 +270,23 @@ registry.registerMany([
      },
      render: () => idle(<FilesPane />)
    },
@@ -77,7 +77,7 @@ index a1fa39755b..7f8d1aba7e 100644
    {
      id: 'review',
      area: 'panes',
-@@ -605,6 +623,16 @@ const $hasWorkspace = computed($currentCwd, cwd => Boolean(cwd.trim()))
+@@ -600,6 +618,16 @@ const $hasWorkspace = computed($currentCwd, cwd => Boolean(cwd.trim()))
  // writes the store too. Without the opener the boolean went stale the moment
  // anything but the toggle showed the pane — the divergence this whole change
  // is about.
@@ -96,10 +96,10 @@ index a1fa39755b..7f8d1aba7e 100644
    computed([$hasWorkspace, $fileBrowserOpen], (workspace, open) => workspace && open),
 diff --git a/apps/desktop/src/app/right-sidebar/cron-tab.tsx b/apps/desktop/src/app/right-sidebar/cron-tab.tsx
 new file mode 100644
-index 0000000000..7225529acf
+index 00000000000..5dcbb90f664
 --- /dev/null
 +++ b/apps/desktop/src/app/right-sidebar/cron-tab.tsx
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,196 @@
 +import { createCronTriggerController, type CronTriggerController } from '@hermes/shared'
 +import { useStore } from '@nanostores/react'
 +import { useEffect, useRef, useState } from 'react'
@@ -110,10 +110,11 @@ index 0000000000..7225529acf
 +import { openSession } from '@/app/open-session'
 +import { CRON_ROUTE } from '@/app/routes'
 +import { usePaneVisible } from '@/components/pane-shell/pane-visibility'
++import type { SessionInfo } from '@/hermes'
 +import { useI18n } from '@/i18n'
 +import { $cronJobs, setCronFocusJobId } from '@/store/cron'
 +import { $profileScope, ALL_PROFILES } from '@/store/profile'
-+import { forgetSessionOwnerHintsForSession, requestSessionResume } from '@/store/session'
++import { forgetSessionOwnerHintsForSession, requestSessionResume, sessionOwnerRouteFromRow } from '@/store/session'
 +
 +import { CronJobSidebarRow, nextRunMs } from '../chat/sidebar/cron-jobs-section'
 +import { SidebarPanelLabel } from '../shell/sidebar-label'
@@ -220,9 +221,18 @@ index 0000000000..7225529acf
 +    void controller.run(jobId, () => triggerAndRefreshCronJobs(jobId, scope)).catch(() => undefined)
 +  }
 +
-+  const openRun = (sessionId: string) => {
-+    forgetSessionOwnerHintsForSession(sessionId)
-+    requestSessionResume(sessionId)
++  const openRun = (sessionId: string, session?: SessionInfo) => {
++    // Same door as the left sidebar / wiring: pin the row's owner route when
++    // the session row is known, so a remote-profile run resolves correctly.
++    const ownerRoute = sessionOwnerRouteFromRow(session)
++
++    if (ownerRoute) {
++      requestSessionResume(sessionId, ownerRoute)
++    } else {
++      forgetSessionOwnerHintsForSession(sessionId)
++      requestSessionResume(sessionId)
++    }
++
 +    openSession(sessionId, navigate)
 +  }
 +
